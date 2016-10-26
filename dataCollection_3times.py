@@ -172,7 +172,10 @@ def insert_DB(content):
         for key, value in content.iteritems():
             keys = keys + str(key) + ","
             values = values + "'" + str(value) + "',"
-            duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
+            if key != 'hourWeather':
+                duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
+            else:
+                sql = ""
         sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'','') + ") VALUES (" + values[:-1] + ")" + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
         # print sql
         cur.execute(sql)

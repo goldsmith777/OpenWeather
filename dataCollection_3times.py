@@ -2,7 +2,7 @@
 import base64
 import hashlib, hmac
 from urllib import urlencode
-import datetime,time
+from datetime import datetime, timedelta
 import MySQLdb as mdb
 import requests
 import simplejson as json
@@ -72,9 +72,9 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
             result[forecast4dFiled[i]] = response['f']['f1'][day][forecast4dCode[i]]
     # 需要特殊处理的字段
     weather_UpdateTime = response['f']['f0']
-    result['weather_UpdateTime'] = str(datetime.datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M"))
+    result['weather_UpdateTime'] = str(datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M"))
     # datetime保存更新的天的信息
-    result['dateTime'] = str(datetime.datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M") + datetime.timedelta(days=day)).split(' ')[0]
+    result['dateTime'] = str(datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M") + timedelta(days=day)).split(' ')[0]
     result['sunrise'] = response['f']['f1'][day]['fi'].split('|')[0]
     result['sunset'] = response['f']['f1'][day]['fi'].split('|')[1]
     # 需要根据配置文件转译返回结果的字段
@@ -136,13 +136,13 @@ def observe_response_trans(response, allPara, weatherCondition, windDire):
     if result.has_key('precipitation'):
         finalResult['precipitation'] = result['precipitation']
     if any(result) and result.has_key('observeTime'):
-        print sys.getdefaultencoding()
+        finalResult['observeTime'] = result['observeTime'][:8]
         hourWeatherStr['observeTime'] = result['observeTime']
         hourWeatherStr['weather'] = {}
         for key, value in result.iteritems():
-            if key != 'observerTime':
                 hourWeatherStr['weather'][key] = value
     finalResult['hourWeather'] = json.dumps(hourWeatherStr, ensure_ascii=False)
+    print finalResult['hourWeather']
     return finalResult
 
 
@@ -170,14 +170,23 @@ def insert_DB(content):
         values = ''
         duplicate_key_values =''
         for key, value in content.iteritems():
-            keys = keys + str(key) + ","
-            values = values + "'" + str(value) + "',"
-            if key != 'hourWeather':
-                duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
-            else:
-                sql = ""
+            if key != 'observeTime':
+                keys = keys + str(key) + ","
+                values = values + "'" + str(value) + "',"
+                if key != 'hourWeather':
+                    duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
+                else:
+                    day = content['observeTime']
+                    select_SQL = "SELECT hourWeather FROM weather_info WHERE dateTime= " + day + " and countyID =" + content['countyID']
+                    if cur.execute(select_SQL) != 0:
+                        lastData = cur.fetchone()
+                        mergeHourWeather = str(lastData) + content['hourWeather']
+                    else:
+                        mergeHourWeather = content['hourWeather']
+                    # print mergeHourWeather
+                    duplicate_key_values = duplicate_key_values + " hourWeather = '" + mergeHourWeather + "',"
         sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'','') + ") VALUES (" + values[:-1] + ")" + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
-        # print sql
+        print sql
         cur.execute(sql)
         conn.commit()
         cur.close()
@@ -191,15 +200,13 @@ if __name__ == '__main__':
     if sys.getdefaultencoding() != default_encoding:
         reload(sys)
         sys.setdefaultencoding(default_encoding)
-    time = time.strftime("%Y%m%d%H%M", time.localtime())
+    time = datetime.strftime(datetime.now(), "%Y%m%d%H%M")
     allPara = para_load()
     allCityCode = city_load()
     weatherCondition = rescode_load("weatherCondition.txt")
     windDire = rescode_load("windDire.txt")
     windLevel = rescode_load("windLevel.txt")
-    print windDire,windLevel
     count = 0
-    startTime = datetime.datetime.now()
     for cityID in allCityCode:
         count = count + 1
         print "the NO.{0} city {1} is downloading".format(count, cityID)
@@ -224,5 +231,5 @@ if __name__ == '__main__':
                 contentDB = forecast4d_contentDB
             contentDB['countyID'] = cityID
             insert_DB(contentDB)
-    runTime = datetime.datetime.now() - startTime
-    print "runTime: {0} ".format(runTime)
+    # runTime = datetime.datetime.now() - startTime
+    # print "runTime: {0} ".format(runTime)

@@ -141,8 +141,8 @@ def observe_response_trans(response, allPara, weatherCondition, windDire):
         hourWeatherStr['weather'] = {}
         for key, value in result.iteritems():
                 hourWeatherStr['weather'][key] = value
-    finalResult['hourWeather'] = json.dumps(hourWeatherStr, ensure_ascii=False)
-    print finalResult['hourWeather']
+    # finalResult['hourWeather'] = json.dumps(hourWeatherStr, ensure_ascii=False)
+    finalResult['hourWeather'] = hourWeatherStr
     return finalResult
 
 
@@ -163,6 +163,7 @@ def air_response_trans(response, allPara):
 
 # 将数据写入数据库
 def insert_DB(content):
+    print contentDB
     try:
         conn = mdb.connect(host='10.100.213.221', user='dialog', passwd='speaker2016', db='DialogService',port=3306, charset='utf8')
         cur= conn.cursor()
@@ -178,12 +179,13 @@ def insert_DB(content):
                 else:
                     day = content['observeTime']
                     select_SQL = "SELECT hourWeather FROM weather_info WHERE dateTime= " + day + " and countyID =" + content['countyID']
+                    print select_SQL
                     if cur.execute(select_SQL) != 0:
                         lastData = cur.fetchone()
                         mergeHourWeather = str(lastData) + content['hourWeather']
                     else:
                         mergeHourWeather = content['hourWeather']
-                    # print mergeHourWeather
+                    print "mergeHour:{0},{1}".format(mergeHourWeather,content)
                     duplicate_key_values = duplicate_key_values + " hourWeather = '" + mergeHourWeather + "',"
         sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'','') + ") VALUES (" + values[:-1] + ")" + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
         print sql
@@ -209,7 +211,6 @@ if __name__ == '__main__':
     count = 0
     for cityID in allCityCode:
         count = count + 1
-        print "the NO.{0} city {1} is downloading".format(count, cityID)
         forecast4d_request_url = gen_request_url(cityID, 'forecast4d', time)
         forecast4d_response = json.loads(http_get(forecast4d_request_url))
         for i in range(4):
@@ -221,6 +222,7 @@ if __name__ == '__main__':
                 observe_request_url = gen_request_url(cityID, 'observe', time)
                 observe_response = json.loads(http_get(observe_request_url))
                 observe_contentDB = observe_response_trans(observe_response, allPara, weatherCondition, windDire)
+                print 'the NO.{0}123213213213'.format(json.dumps(observe_contentDB['hourWeather'],ensure_ascii=False))
                 air_request_url = gen_request_url(cityID, 'air', time)
                 air_response = json.loads(http_get(air_request_url))
                 air_contentDB = air_response_trans(air_response, allPara)
@@ -230,6 +232,7 @@ if __name__ == '__main__':
             else:
                 contentDB = forecast4d_contentDB
             contentDB['countyID'] = cityID
+            print contentDB
             insert_DB(contentDB)
     # runTime = datetime.datetime.now() - startTime
     # print "runTime: {0} ".format(runTime)

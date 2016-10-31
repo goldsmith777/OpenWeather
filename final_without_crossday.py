@@ -90,7 +90,6 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
         result['wind_night'] = windLevel[result['wind_night']]
     if result.has_key('wind'):
         result['wind'] = windLevel[result['wind']]
-    # result['']
     return result
 
 
@@ -101,12 +100,15 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
 def index_response_trans(response):
     result = {}
     indexFiled = ['index_ChuanYi','index_GanMao','index_XiChe']
-    if response.has_key('i'):
-        if len(response['i']) == 3:
-            indexValue = [response['i'][i]['i5'] for i in range(3) if response['i'][i].has_key('i5')]
-    for i in range(3):
-        if indexValue[i]!='' and indexValue[i]!='?':
-            result[indexFiled[i]] = indexValue[i]
+    try:
+        if response.has_key('i'):
+            if len(response['i']) == 3:
+                indexValue = [response['i'][i]['i5'] for i in range(3) if response['i'][i].has_key('i5')]
+            for i in range(3):
+                if indexValue[i]!='' and indexValue[i]!='?':
+                    result[indexFiled[i]] = indexValue[i]
+    except:
+        print "Can't get the index date"
     return result
 
 
@@ -142,7 +144,7 @@ def observe_response_trans(response, allPara, weatherCondition, windDire):
         for key, value in result.iteritems():
             if key != 'observeTime':
                 hourWeatherStr['weather'][key] = value
-    finalResult['observeTime'] = result['observeTime'][:8]
+        finalResult['observeTime'] = result['observeTime'][:8]
     finalResult['hourWeather'] = json.dumps(hourWeatherStr, ensure_ascii=False)
     return finalResult
 
@@ -155,10 +157,13 @@ def air_response_trans(response, allPara):
     airFiled = [allPara[i][3] for i in range(len(allPara)) if (allPara[i][0] == 'air' and allPara[i][3] != 'null')]
     airCode = [allPara[i][1] for i in range(len(allPara)) if (allPara[i][0] == 'air' and allPara[i][3] != 'null')]
     # 将返回结果中的数据写入字典
-    for i in range(len(airFiled)):
-        if type(response['p']) == dict:
-            if response['p'].has_key(airCode[i]) and response['p'][airCode[i]]!='?':
-                result[airFiled[i]] = response['p'][airCode[i]]
+    try:
+        if response.has_key('p'):
+            for i in range(len(airFiled)):
+                if response['p'].has_key(airCode[i]) and response['p'][airCode[i]]!='?':
+                    result[airFiled[i]] = response['p'][airCode[i]]
+    except:
+        print "Can't get the air quality"
     return result
 
 
@@ -171,27 +176,29 @@ def insert_DB(content):
         values = ''
         duplicate_key_values =''
         for key, value in content.iteritems():
-            if key != 'hourWeather' and key != 'observeTime':
+            # if key != 'hourWeather' and key != 'observeTime':
+            if key not in ['hourWeather','observeTime'] :
                 keys = keys + str(key) + ","
                 values = values + "'" + str(value) + "',"
                 duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
-            if key == 'hourWeather':
-                keys = keys + str(key) + ","
-                values = values + "'" + str(value) + "',"
-                hourWeatherUpdate = "hourWeather = CONCAT_WS('', hourWeather, ', " \
-                                       + str(value) + "' )"
-        if content.has_key('hourWeather'):
-            sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'','') + ") VALUES (" + values[:-1] + ")" \
-                 + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1] + ',' + hourWeatherUpdate
-        else:
-            sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'', '') + ") VALUES (" + values[:-1] + ")" \
-                  + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
+            if key == 'hourWeather' and content.has_key("observeTime"):
+                keys_hourWeather = str(key) + ", countyID, dateTime"
+                values_hourWeather = "'" + str(value) + "','" + str(content["countyID"]) + "','" + str(content["observeTime"])+ "'"
+                hourWeatherUpdate = "hourWeather = CONCAT_WS('', hourWeather, '" + str(value) + ",')"
+        # print duplicate_key_values, hourWeatherUpdate
+        sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'', '') + ") VALUES (" + values[:-1] + ")" \
+                       + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
         cur.execute(sql)
         conn.commit()
+        if content.has_key('hourWeather') and content.has_key("observeTime"):
+            sql_hourWeather = "INSERT INTO weather_info(" + keys_hourWeather + ") VALUES (" + values_hourWeather + ")" \
+                  + " ON DUPLICATE KEY UPDATE " + hourWeatherUpdate
+            cur.execute(sql_hourWeather)
+            conn.commit()
         cur.close()
         conn.close()
-    except mdb.Error,e:
-         print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+    except:
+         print "Insert DB Fail"
 
 
 if __name__ == '__main__':
@@ -199,6 +206,7 @@ if __name__ == '__main__':
     if sys.getdefaultencoding() != default_encoding:
         reload(sys)
         sys.setdefaultencoding(default_encoding)
+    startTime = datetime.now()
     time = datetime.strftime(datetime.now(), "%Y%m%d%H%M")
     allPara = para_load()
     allCityCode = city_load()
@@ -213,23 +221,23 @@ if __name__ == '__main__':
         forecast4d_response = json.loads(http_get(forecast4d_request_url))
         for i in range(4):
             forecast4d_contentDB = forecast4d_response_trans(forecast4d_response, allPara, weatherCondition, windDire, windLevel, i)
-            if i==0:
+            if i == 0:
                 index_request_url = gen_request_url(cityID, 'index', time)
                 index_response = json.loads(http_get(index_request_url))
                 index_contentDB = index_response_trans(index_response)
                 observe_request_url = gen_request_url(cityID, 'observe', time)
                 observe_response = json.loads(http_get(observe_request_url))
                 observe_contentDB = observe_response_trans(observe_response, allPara, weatherCondition, windDire)
-
                 air_request_url = gen_request_url(cityID, 'air', time)
                 air_response = json.loads(http_get(air_request_url))
                 air_contentDB = air_response_trans(air_response, allPara)
+                # print air_contentDB,observe_contentDB
                 contentDB = dict(forecast4d_contentDB, **index_contentDB)
                 contentDB = dict(contentDB, **observe_contentDB)
                 contentDB = dict(contentDB, **air_contentDB)
             else:
                 contentDB = forecast4d_contentDB
             contentDB['countyID'] = cityID
-            insert_DB(contentDB)
-    # runTime = datetime.datetime.now() - startTime
-    # print "runTime: {0} ".format(runTime)
+            # insert_DB(contentDB)
+    runTime = datetime.now() - startTime
+    print "runTime: {0} ".format(runTime)

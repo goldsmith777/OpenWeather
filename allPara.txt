@@ -10,9 +10,9 @@ air p2 AQI aqi null
 air P3 NO2 null null
 air p4 O3 null null
 air p5 PM10 pm10 null
-air P6 SO2 null null
-air P7 CO null null
-air P9 更新时间 null null
+air p6 SO2 null null
+air p7 CO null null
+air p9 更新时间 airTime null
 forecast4d c1 区域ID null null null
 forecast4d c2 城市英文名 null null null
 forecast4d c3 城市中文名 county True null

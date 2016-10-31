@@ -1,15 +1,13 @@
-# coding:utf-8
+#coding:utf-8
+import threading
 import base64
 import hashlib, hmac
 from urllib import urlencode
-import datetime,time
+from datetime import datetime, timedelta
 import MySQLdb as mdb
 import requests
-import json
-import threading
-import sys, os
-from multiprocessing import Process
-from datetime import datetime as dt
+import simplejson as json
+import sys
 
 
 def para_load():
@@ -18,6 +16,7 @@ def para_load():
     for item in rawData:
         temp = item.split(' ')
         profile.append(temp)
+    # print profile
     return profile
 
 
@@ -74,9 +73,9 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
             result[forecast4dFiled[i]] = response['f']['f1'][day][forecast4dCode[i]]
     # 需要特殊处理的字段
     weather_UpdateTime = response['f']['f0']
-    result['weather_UpdateTime'] = str(DT.strptime(weather_UpdateTime, "%Y%m%d%H%M"))
+    result['weather_UpdateTime'] = str(datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M"))
     # datetime保存更新的天的信息
-    result['dateTime'] = str(datetime.datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M") + datetime.timedelta(days=day)).split(' ')[0]
+    result['dateTime'] = str(datetime.strptime(weather_UpdateTime, "%Y%m%d%H%M") + timedelta(days=day)).split(' ')[0]
     result['sunrise'] = response['f']['f1'][day]['fi'].split('|')[0]
     result['sunset'] = response['f']['f1'][day]['fi'].split('|')[1]
     # 需要根据配置文件转译返回结果的字段
@@ -92,7 +91,6 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
         result['wind_night'] = windLevel[result['wind_night']]
     if result.has_key('wind'):
         result['wind'] = windLevel[result['wind']]
-    # result['']
     return result
 
 
@@ -100,15 +98,18 @@ def forecast4d_response_trans(response, allPara, weatherCondition, windDire, win
 # 第一级别：response['i']是一个列表，3个元素分别表示三种指数; response['i0']表示指数发布时间
 # 第二级别：response['i'][0]表示穿衣指数，response['i'][1]表示感冒指数，response['i'][2]表示洗车指数。
 # 第三级别：response['i'][0]['i4']是穿衣指数的总体描述；response['i'][0]['i5']表示穿衣指数的建议，不需要解析。
-def index_response_trans(response):
+def index_response_trans(cityID, response):
     result = {}
     indexFiled = ['index_ChuanYi','index_GanMao','index_XiChe']
-    if response.has_key('i'):
-        if len(response['i']) == 3:
-            indexValue = [response['i'][i]['i5'] for i in range(3) if response['i'][i].has_key('i5')]
-    for i in range(3):
-        if indexValue[i]!='' and indexValue[i]!='?':
-            result[indexFiled[i]] = indexValue[i]
+    try:
+        if response.has_key('i'):
+            if len(response['i']) == 3:
+                indexValue = [response['i'][i]['i5'] for i in range(3) if response['i'][i].has_key('i5')]
+            for i in range(3):
+                if indexValue[i]!='' and indexValue[i]!='?':
+                    result[indexFiled[i]] = indexValue[i]
+    except:
+        print "Can't get the index date of cityID: " + cityID
     return result
 
 
@@ -117,7 +118,7 @@ def index_response_trans(response):
 # 第二级别：response['l']['...']直接查询参数文件，部分需要查配置文件
 def observe_response_trans(response, allPara, weatherCondition, windDire):
     result = {}
-    hourWeatherStr = ''
+    hourWeatherStr = {}
     finalResult = {}
     # 获取所有可能的字段名和字段在response中的代码
     observeFiled = [allPara[i][3] for i in range(len(allPara)) if (allPara[i][0] == 'observe' and allPara[i][3] != 'null')]
@@ -133,29 +134,39 @@ def observe_response_trans(response, allPara, weatherCondition, windDire):
         result['windDire'] = windDire[result['windDire']]
     if result.has_key('weatherCondition'):
         result['weatherCondition'] = weatherCondition[result['weatherCondition']]
-    for key, value in result.iteritems():
-        hourWeatherStr = hourWeatherStr + key +':' +  value + ","
     if result.has_key('humidity'):
         finalResult['humidity'] = result['humidity']
     if result.has_key('precipitation'):
         finalResult['precipitation'] = result['precipitation']
-    if hourWeatherStr != '':
-        finalResult['hourWeather'] = hourWeatherStr[:-1]
+    if any(result) and result.has_key('observeTime'):
+        finalResult['observeTime'] = result['observeTime']
+        hourWeatherStr['observeTime'] = result['observeTime']
+        hourWeatherStr['weather'] = {}
+        for key, value in result.iteritems():
+            if key != 'observeTime':
+                hourWeatherStr['weather'][key] = value
+        finalResult['observeTime'] = result['observeTime'][:8]
+    finalResult['hourWeather'] = json.dumps(hourWeatherStr, ensure_ascii=False)
     return finalResult
 
 
 # ~~~~~~~~~~~~~~~~air response的json解析~~~~~~~~~~~~~~~~~~~~
 # 第一级别：response['p']表示内容
 # 第二级别：response['p']['...']直接查询结果，不需要查配置文件
-def air_response_trans(response, allPara):
+def air_response_trans(cityID, response, allPara):
     result = {}
     airFiled = [allPara[i][3] for i in range(len(allPara)) if (allPara[i][0] == 'air' and allPara[i][3] != 'null')]
     airCode = [allPara[i][1] for i in range(len(allPara)) if (allPara[i][0] == 'air' and allPara[i][3] != 'null')]
     # 将返回结果中的数据写入字典
-    for i in range(len(airFiled)):
-        if type(response['p']) == dict:
-            if response['p'].has_key(airCode[i]):
-                result[airFiled[i]] = int(response['p'][airCode[i]])
+    try:
+        if response.has_key('p'):
+            for i in range(len(airFiled)):
+                if response['p'].has_key(airCode[i]) and response['p'][airCode[i]]!='?':
+                    result[airFiled[i]] = response['p'][airCode[i]]
+        if result.has_key('airTime'):
+            result['airTime'] = result['airTime'][:8]
+    except:
+        print "Can't get the air quality of city: " + cityID
     return result
 
 
@@ -163,99 +174,128 @@ def air_response_trans(response, allPara):
 def insert_DB(content):
     try:
         conn = mdb.connect(host='10.100.213.221', user='dialog', passwd='speaker2016', db='DialogService',port=3306, charset='utf8')
-        cur= conn.cursor()
+        cur = conn.cursor()
         keys = ''
         values = ''
-        duplicate_key_values =''
+        duplicate_key_values = ''
+        observe_keys = ''
+        observe_values = ''
+        observe_duplicate_key_values = ''
+        air_keys = ''
+        air_values= ''
+        air_duplicate_key_values = ''
+        observe_all_keys = ['hourWeather', 'observeTime', 'precipitation', 'humidity']
+        air_all_keys = ['airTime', 'aqi', 'pm10', 'pm25']
         for key, value in content.iteritems():
-            keys = keys + str(key) + ","
-            values = values + "'"+ str(value) + "',"
-            duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
-        sql = "INSERT INTO weather_info(" + keys[:-1].replace('\'','') + ") VALUES (" + values[:-1] + ")" + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
-        # print sql
-        cur.execute(sql)
+            # if key != 'hourWeather' and key != 'observeTime':
+            if key not in observe_all_keys + air_all_keys:
+                keys = keys + str(key) + ","
+                values = values + "'" + str(value) + "',"
+                duplicate_key_values = duplicate_key_values + str(key) + "='" + str(value) + "',"
+            if content.has_key('observeTime'):
+                if key in observe_all_keys and key!= 'hourWeather' and key != 'observeTime':
+                    observe_keys = observe_keys + str(key) + ", "
+                    observe_values = observe_values +  "'" + str(value) + "', "
+                    observe_duplicate_key_values = observe_duplicate_key_values + str(key) + "='" + str(value) + "',"
+                if key == 'hourWeather':
+                    # 将airTime和数据库中的dateTime做对应，保证插入正确的天
+                    # 将hourWeather设置为追加模式
+                    observe_sql_keys = str(key) + ", countyID, dateTime"
+                    observe_sql_values = "'" + str(value) + "','" + str(content["countyID"]) + "','" + str(content["observeTime"]) + "'"
+                    hourWeatherUpdate = "hourWeather = CONCAT_WS('', hourWeather, '" + str(value) + ",')"
+            if content.has_key('airTime'):
+                if key in air_all_keys and key!= 'airTime':
+                    air_keys = air_keys + str(key) + ", "
+                    air_values = air_values +  "'" + str(value) + "', "
+                    air_duplicate_key_values = air_duplicate_key_values + str(key) + "='" + str(value) + "',"
+                if key == 'airTime':
+                    # 将airTime和数据库中的dateTime做对应，保证插入正确的天
+                    air_sql_keys = "countyID, dateTime"
+                    air_sql_values = "'" + str(content["countyID"]) + "','" + str(value) + "'"
+        # if content.has_key('airTime'):
+        # 写入forecast和index的天气数据，key为countyID+dateTime
+        forecast_sql = "INSERT INTO weather_info_test(" + keys[:-1].replace('\'', '') + ") VALUES (" + values[:-1] + ")" \
+                       + " ON DUPLICATE KEY UPDATE " + duplicate_key_values[:-1]
+        # print forecast_sql
+        cur.execute(forecast_sql)
+        # 单独写入observe天气的数据, 对应key为countyID+dateTime
+        if content.has_key('hourWeather') and content.has_key("observeTime"):
+            observe_sql = "INSERT INTO weather_info_test(" + observe_keys + observe_sql_keys + ") VALUES (" +  observe_values + observe_sql_values + ")" \
+                  + " ON DUPLICATE KEY UPDATE " + observe_duplicate_key_values + hourWeatherUpdate
+            cur.execute(observe_sql)
+        if content.has_key("airTime"):
+            air_sql = "INSERT INTO weather_info_test(" + air_keys + air_sql_keys + ") VALUES (" + air_values + air_sql_values + ")" \
+                  + " ON DUPLICATE KEY UPDATE " + air_duplicate_key_values[:-1]
+            cur.execute(air_sql)
         conn.commit()
         cur.close()
         conn.close()
-    except mdb.Error,e:
-         print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+    except:
+         print "Insert DB Fail"
 
-
-def insertDB_loop(count,cityCode, time, allPara, weatherCondition, windDire, windLevel):
-    # # lock.acquire()
-    # try:
-    #
-    # finally:
-    #     # 改完了一定要释放锁:
-    #     # lock.release()
-    for cityID in cityCode:
-        global countAll
-        countAll += 1
-        print "Task {0} is running...the NO.{1} city {2} is downloading".format(threading.current_thread().name, countAll, cityID)
+def insertDB_loop(partCity,):
+    time = datetime.strftime(datetime.now(), "%Y%m%d%H%M")
+    allPara = para_load()
+    weatherCondition = rescode_load("weatherCondition.txt")
+    windDire = rescode_load("windDire.txt")
+    windLevel = rescode_load("windLevel.txt")
+    for cityID in partCity:
+        global count
+        count += 1
+        print "Task {0} is running...the NO.{1} city {2} is downloading".format(threading.current_thread().name,
+                                                                                count, cityID)
         forecast4d_request_url = gen_request_url(cityID, 'forecast4d', time)
         forecast4d_response = json.loads(http_get(forecast4d_request_url))
         for i in range(4):
-            forecast4d_contentDB = forecast4d_response_trans(forecast4d_response, allPara, weatherCondition, windDire,
-                                                             windLevel, i)
+            threading_lock.acquire()
+            forecast4d_contentDB = forecast4d_response_trans(forecast4d_response, allPara, weatherCondition,
+                                                         windDire, windLevel, i)
+            threading_lock.release()
             if i == 0:
                 index_request_url = gen_request_url(cityID, 'index', time)
                 index_response = json.loads(http_get(index_request_url))
-                index_contentDB = index_response_trans(index_response)
                 observe_request_url = gen_request_url(cityID, 'observe', time)
                 observe_response = json.loads(http_get(observe_request_url))
-                observe_contentDB = observe_response_trans(observe_response, allPara, weatherCondition, windDire)
                 air_request_url = gen_request_url(cityID, 'air', time)
                 air_response = json.loads(http_get(air_request_url))
-                air_contentDB = air_response_trans(air_response, allPara)
+                threading_lock.acquire()
+                air_contentDB = air_response_trans(cityID, air_response, allPara)
+                threading_lock.release()
+                index_contentDB = index_response_trans(cityID, index_response)
+                observe_contentDB = observe_response_trans(observe_response, allPara, weatherCondition, windDire)
                 contentDB = dict(forecast4d_contentDB, **index_contentDB)
                 contentDB = dict(contentDB, **observe_contentDB)
                 contentDB = dict(contentDB, **air_contentDB)
             else:
                 contentDB = forecast4d_contentDB
             contentDB['countyID'] = cityID
+            # threading_lock.acquire()
             insert_DB(contentDB)
-            # lock.acquire()
-            # try:
-            #     # 放心地改吧:
-            #
-            # # finally:
-            #     # 改完了一定要释放锁:
-            #     # lock.release()
-
+            # threading_lock.release()
 
 
 if __name__ == '__main__':
-    lock = threading.Lock()
-    countAll = 0
-    count = 0
     default_encoding = 'utf-8'
     if sys.getdefaultencoding() != default_encoding:
         reload(sys)
         sys.setdefaultencoding(default_encoding)
-    time = time.strftime("%Y%m%d%H%M", time.localtime())
-    allPara = para_load()
+    startTime = datetime.now()
     allCityCode = city_load()
-    weatherCondition = rescode_load("weatherCondition.txt")
-    windDire = rescode_load("windDire.txt")
-    windLevel = rescode_load("windLevel.txt")
+    count = 0
     cityCode = []
+    proc_record = []
+    threading_lock = threading.Lock()
     for i in range(5):
-        cityCode.append(allCityCode[(i*len(allCityCode)/5):((i+1)*len(allCityCode)/5)])
-    p1 = threading.Thread(target=insertDB_loop, args=(count, cityCode[0], time, allPara, weatherCondition, windDire, windLevel))
-    p2 = threading.Thread(target=insertDB_loop, args=(count, cityCode[1], time, allPara, weatherCondition, windDire, windLevel))
-    p3 = threading.Thread(target=insertDB_loop, args=(count,cityCode[2], time, allPara, weatherCondition, windDire, windLevel))
-    # p4 = threading.Thread(target=insertDB_loop, args=(count,cityCode[3], time, allPara, weatherCondition, windDire, windLevel))
-    # p5 = threading.Thread(target=insertDB_loop, args=(count,cityCode[4], time, allPara, weatherCondition, windDire, windLevel))
-    p1.start()
-    p2.start()
-    p3.start()
-    # p4.start()
-    # p5.start()
-    p1.join()
-    p2.join()
-    p3.join()
-    # p4.join()
-    # p5.join()
-    # startTime = datetime.datetime.now()
-    # runTime = datetime.datetime.now() - startTime
-    # print "runTime: {0} ".format(runTime)
+        cityCode.append(allCityCode[(i * len(allCityCode) / 5):((i + 1) * len(allCityCode) / 5)])
+        # print cityCode[i][:5]
+    for i in range(5):
+        sub_thread = threading.Thread(target=insertDB_loop, args=(cityCode[i],))
+        # 父线程结束会杀死该子线程
+        sub_thread.setDaemon(True)
+        proc_record.append(sub_thread)
+    for i in range(5):
+        proc_record[i].start()
+    for item in proc_record:
+        item.join()
+    runTime = datetime.now() - startTime
+    print "runTime: {0} ".format(runTime)
